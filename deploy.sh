@@ -230,9 +230,9 @@ clone_repository() {
 
 change_into_repo_dir() {
     cd "$REPO_DIR" || log_error "Failed to change directory to $REPO_DIR."
-    # check to see if Dockerfile or docker-compose.yml exists
-    if [[ ! -f "Dockerfile" && ! -f "docker-compose.yml" ]]; then
-        log_error "No Dockerfile or docker-compose.yml found in $REPO_DIR."
+    # check to see if Dockerfile or docker-compose.yaml exists
+    if [[ ! -f "Dockerfile" && ! -f "docker-compose.yaml" ]]; then
+        log_error "No Dockerfile or docker-compose.yaml found in $REPO_DIR."
     fi
 }
 
@@ -276,21 +276,22 @@ preparing_remote_environment(){
 deploy_dockerize_app(){
     log_info "Deploying Dockerized application on remote server..."
     # Placeholder for deployment commands
-    #scp docker-compose.yml and Dockerfile to remote server
+    #scp docker-compose.yaml and Dockerfile to remote server
     log_info "Copying Docker configuration files to remote server..."
-    scp -i "$SSH_KEY_PATH" docker-compose.yml "$SSH_USER@$SERVER_IP:~/docker-compose.yml" || log_error "Failed to copy docker-compose.yml to remote server."
+    scp -i "$SSH_KEY_PATH" docker-compose.yaml "$SSH_USER@$SERVER_IP:~/docker-compose.yaml" || log_error "Failed to copy docker-compose.yaml to remote server."
     scp -i "$SSH_KEY_PATH" Dockerfile "$SSH_USER@$SERVER_IP:~/Dockerfile" || log_error "Failed to copy Dockerfile to remote server."
+    scp -i "$SSH_KEY_PATH" index.html "$SSH_USER@$SERVER_IP:~/index.html" || log_error "Failed to copy index.html to remote server."
     #build image and run container
-    log_info "Building Docker image and running container on remote server..."
-    ssh -i "$SSH_KEY_PATH" "$SSH_USER@$SERVER_IP" 'docker build -t my_app_image . && docker run -d -p '"$APP_PORT"':80 my_app_image' || log_error "Failed to build and run Docker container on remote server."
+    # log_info "Building Docker image and running container on remote server..."
+    # ssh -i "$SSH_KEY_PATH" "$SSH_USER@$SERVER_IP" 'docker build -t my_app_image . && docker run -d -p '"$APP_PORT"':80 my_app_image' || log_error "Failed to build and run Docker container on remote server."
     # or using docker-compose
-    #ssh -i "$SSH_KEY_PATH" "$SSH_USER@$SERVER_IP" 'docker-compose up -d' || log_error "Failed to deploy application using docker-compose on remote server."
+    ssh -i "$SSH_KEY_PATH" "$SSH_USER@$SERVER_IP" 'docker-compose up -d' || log_error "Failed to deploy application using docker-compose on remote server."
     # validdate deployment
     log_info "Validating deployment on remote server..."
     ssh -i "$SSH_KEY_PATH" "$SSH_USER@$SERVER_IP" 'docker ps' || log_error "Failed to verify running Docker containers on remote server."
     # validate contianer health and logs
     log_info "Checking Docker container logs on remote server..."
-    ssh -i "$SSH_KEY_PATH" "$SSH_USER@$SERVER_IP" 'docker logs $(docker ps -q --filter ancestor=my_app_image)' || log_error "Failed to retrieve Docker container logs on remote server."
+    ssh -i "$SSH_KEY_PATH" "$SSH_USER@$SERVER_IP" 'docker logs hng13-container' || log_error "Failed to retrieve Docker container logs on remote server."
     # confirm application is accessible
     log_info "Checking application accessibility at http://$SERVER_IP:$APP_PORT..."
     curl -I "http://$SERVER_IP:$APP_PORT" || log_error "Failed to access the deployed application at http://$SERVER_IP:$APP_PORT."
@@ -299,11 +300,11 @@ deploy_dockerize_app(){
     log_success "Dockerized application deployed successfully."
 }
 
-configuring_nginx_reverse_proxy(){
+configuring_nginx_reverse_proxy() {
     log_info "Configuring Nginx as a reverse proxy on remote server..."
-    # Placeholder for Nginx configuration commands
-    # Create Nginx config file
-    local NGINX_CONFIG="server {
+
+    local NGINX_CONFIG=$(cat <<EOF
+    server {
         listen 80;
         server_name $SERVER_IP;
 
@@ -314,22 +315,32 @@ configuring_nginx_reverse_proxy(){
             proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
             proxy_set_header X-Forwarded-Proto \$scheme;
         }
-    }"
 
-    # Upload Nginx config to remote server
+        location /health {
+            return 200 "OK\n";
+            add_header Content-Type text/plain;
+        }
+    }
+EOF
+)
+
     log_info "Uploading Nginx configuration to remote server..."
-    echo "$NGINX_CONFIG" | ssh -i "$SSH_KEY_PATH" "$SSH_USER@$SERVER_IP" 'sudo tee /etc/nginx/sites-available/default' || log_error "Failed to upload Nginx configuration to remote server."
+    echo "$NGINX_CONFIG" | ssh -i "$SSH_KEY_PATH" "$SSH_USER@$SERVER_IP" \
+        'sudo tee /etc/nginx/conf.d/reverse-proxy.conf >/dev/null' \
+        || log_error "Failed to upload Nginx configuration to remote server."
 
-    # Test Nginx configuration
     log_info "Testing Nginx configuration on remote server..."
-    ssh -i "$SSH_KEY_PATH" "$SSH_USER@$SERVER_IP" 'sudo nginx -t' || log_error "Nginx configuration test failed on remote server."
+    ssh -i "$SSH_KEY_PATH" "$SSH_USER@$SERVER_IP" 'sudo nginx -t' \
+        || log_error "Nginx configuration test failed on remote server."
 
-    # Reload Nginx to apply changes
     log_info "Reloading Nginx on remote server..."
-    ssh -i "$SSH_KEY_PATH" "$SSH_USER@$SERVER_IP" 'sudo systemctl reload nginx' || log_error "Failed to reload Nginx on remote server."
+    ssh -i "$SSH_KEY_PATH" "$SSH_USER@$SERVER_IP" \
+        'sudo nginx -s reload || sudo systemctl reload nginx' \
+        || log_error "Failed to reload Nginx on remote server."
 
     log_success "Nginx configured successfully as a reverse proxy."
 }
+
 # --- Main Execution ---
 
 main() {
@@ -369,6 +380,8 @@ main() {
     preparing_remote_environment
     # deploy dockerized app 
     deploy_dockerize_app
+    # configure nginx as reverse proxy
+    configuring_nginx_reverse_proxy
 
     # Example of a deployment step that would use the variables:
     # log_info "Attempting to copy key to agent and connecting to remote host..."
